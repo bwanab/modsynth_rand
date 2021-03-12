@@ -3,12 +3,15 @@ defmodule Modsynth.Rand.State do
     last_rhythm: 0,
     note_control: 0,
     bpm: 240,
-    scale: []
+    scale: [],
+    gate_registry: []
+
   @type t :: %__MODULE__{last_note: integer,
                          last_rhythm: integer,
                          note_control: integer,
                          bpm: integer,
-                         scale: list
+                         scale: list,
+                         gate_registry: list
   }
 end
 
@@ -74,7 +77,7 @@ defmodule Modsynth.Rand do
   def play(file, scale \\ {:D, :pent}, bpm \\ 240) do
     # Modsynth.Rand.Supervisor.start_link([])
     set_scale(Modsynth.Rand, get_scale(scale))
-    {controls, connections} = Modsynth.play(file)
+    {controls, connections} = Modsynth.play(file, &register_gate/1)
     {_, note, _, _, _} = Enum.find(controls, fn {_, _, _, _, control} -> control == :note end)
     # Logger.info("note control: #{note}")
     GenServer.call(Modsynth.Rand, {:set_note_control, note})
@@ -84,6 +87,10 @@ defmodule Modsynth.Rand do
     set_bpm(Modsynth.Rand, bpm)
     schedule_next_note(Modsynth.Rand, first_dur, bpm)
     {Modsynth.Rand, controls, connections}
+  end
+
+  def register_gate(id) do
+    GenServer.call(Modsynth.Rand, {:register_gate, id})
   end
 
 
@@ -109,7 +116,7 @@ defmodule Modsynth.Rand do
   @impl true
   def handle_call(:stop_playing, _from, state) do
     ScClient.group_free(1)
-    {:reply, :ok, %State{state | last_note: -1}}
+    {:reply, :ok, %State{state | last_note: -1, gate_registry: []}}
   end
 
   @impl true
@@ -142,16 +149,37 @@ defmodule Modsynth.Rand do
   end
 
   @impl true
+  def handle_call({:register_gate, id}, _from, %State{gate_registry: gate_registry} = state) do
+    gate_registry = [id|gate_registry]
+    Logger.info("gate_registry: #{inspect(gate_registry)}")
+    {:reply, :ok,
+     %{state | gate_registry: gate_registry}}
+  end
+
+  @impl true
+  def handle_info({:open_gate, id}, state) do
+    ScClient.set_control(id, "gate", 1)
+    Logger.info("set control #{id} gate 1")
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(:next_note, %State{last_note: last_note,
                                      scale: scale,
                                      note_control: note,
-                                     bpm: bpm} = state) do
+                                     bpm: bpm,
+                                     gate_registry: gate_registry} = state) do
     if last_note < 0 do
       {:noreply, state}
     else
       next_note = Modsynth.Rand.rand(last_note, scale)
       next_rhythm = rhythm()
       ScClient.set_control(note, "in", next_note)
+      Enum.each(gate_registry, fn g ->
+        ScClient.set_control(g, "gate", 0)
+        Logger.info("set control #{g} gate 0")
+        Process.send_after(self(), {:open_gate, g}, 50)
+      end)
       schedule_next_note(self(), next_rhythm, bpm)
       {:noreply, %State{state | last_note: next_note, last_rhythm: next_rhythm}}
     end
