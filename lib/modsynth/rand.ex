@@ -77,7 +77,7 @@ defmodule Modsynth.Rand do
   def play(file, scale \\ {:D, :pent}, bpm \\ 240) do
     # Modsynth.Rand.Supervisor.start_link([])
     set_scale(Modsynth.Rand, get_scale(scale))
-    {controls, connections} = Modsynth.play(file, &register_gate/1)
+    {controls, node_map, connections} = Modsynth.play(file, &register_gate/1)
     {_, note, _, _, _} = Enum.find(controls, fn {_, _, _, _, control} -> control == :note end)
     # Logger.info("note control: #{note}")
     GenServer.call(Modsynth.Rand, {:set_note_control, note})
@@ -86,7 +86,7 @@ defmodule Modsynth.Rand do
     ScClient.set_control(note, "in", first_note)
     set_bpm(Modsynth.Rand, bpm)
     schedule_next_note(Modsynth.Rand, first_dur, bpm)
-    {Modsynth.Rand, controls, connections}
+    {controls, node_map, connections}
   end
 
   def register_gate(id) do
